@@ -1,0 +1,259 @@
+#!/bin/bash
+
+# Function to check for pom.xml and exit if not found
+check_pom_exists() {
+    if [ ! -f "pom.xml" ]; then
+        echo "Error: pom.xml not found in the current directory."
+        exit 1
+    fi
+}
+
+# Function to get a Maven property value
+get_maven_property() {
+    local property_name=$1
+    mvn help:evaluate -Dexpression=${property_name} -q -DforceStdout
+}
+
+# Function to derive base package from groupId and artifactId
+derive_base_package() {
+    local groupId=$(get_maven_property 'project.groupId')
+    local artifactId=$(get_maven_property 'project.artifactId')
+
+    if [ -z "$groupId" ] || [ -z "$artifactId" ]; then
+        echo "Error: Unable to derive base package from groupId and artifactId."
+        exit 1
+    fi
+
+    echo "${groupId}.${artifactId}"
+}
+
+# Check if pom.xml exists
+check_pom_exists
+
+# Default base package (can be overridden)
+BASE_PACKAGE=$(get_maven_property 'springen.basePackage')
+
+# Fallback to derive base package if necessary
+if [ "$BASE_PACKAGE" = "null object or invalid expression" ] || [ -z "$BASE_PACKAGE" ]; then
+    BASE_PACKAGE=$(derive_base_package)
+fi
+
+# Exit if BASE_PACKAGE is still not set correctly
+if [ "$BASE_PACKAGE" = "null object or invalid expression" ] || [ -z "$BASE_PACKAGE" ]; then
+    echo "Error: Base package could not be determined."
+    exit 1
+fi
+
+# Default source directory
+SRC_DIR="src/main/java"
+
+# Function to convert package name to directory path
+package_to_dir() {
+    echo "$1" | tr '.' '/'
+}
+
+# Full path to the base directory for the package
+BASE_DIR="${SRC_DIR}/$(package_to_dir "$BASE_PACKAGE")"
+
+# Function to create a Java file with given content
+create_file() {
+    local file_path=$1
+    local content=$2
+    mkdir -p "$(dirname "$file_path")"
+    echo "$content" > "$file_path"
+    echo "Created: $file_path"
+}
+
+# Function to create Controller
+create_controller() {
+    local name=$1
+    local lowercase_name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+    local file="${BASE_DIR}/controllers/${name}Controller.java"
+    local content=$(cat <<EOL
+package ${BASE_PACKAGE}.controllers;
+
+import ${BASE_PACKAGE}.services.${name}Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/${lowercase_name}")
+public class ${name}Controller {
+
+    @Autowired
+    private ${name}Service ${lowercase_name}Service;
+
+    // Sample GET endpoint
+    @GetMapping
+    public String get${name}s() {
+        return "${name} Controller is working!";
+    }
+}
+EOL
+)
+    create_file "$file" "$content"
+}
+
+# Function to create Service
+create_service() {
+    local name=$1
+    local lowercase_name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+    local file="${BASE_DIR}/services/${name}Service.java"
+    local content=$(cat <<EOL
+package ${BASE_PACKAGE}.services;
+
+import ${BASE_PACKAGE}.repositories.${name}Repository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+@Service
+@Slf4j
+public class ${name}Service {
+
+    @Autowired
+    private ${name}Repository ${lowercase_name}Repository;
+
+    // Sample service method
+    public void exampleMethod() {
+        log.info("${name}Service exampleMethod executed");
+    }
+}
+EOL
+)
+    create_file "$file" "$content"
+}
+
+# Function to create Entity
+create_entity() {
+    local name=$1
+    local lowercase_name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+    local file="${BASE_DIR}/entities/${name}.java"
+    local content=$(cat <<EOL
+package ${BASE_PACKAGE}.entities;
+
+import jakarta.persistence.*;
+
+@Entity
+@Table(name = "${lowercase_name}s")
+public class ${name} {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    // Add your fields here
+    private String exampleField;
+
+    // Getters and Setters
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getExampleField() {
+        return exampleField;
+    }
+
+    public void setExampleField(String exampleField) {
+        this.exampleField = exampleField;
+    }
+}
+EOL
+)
+    create_file "$file" "$content"
+}
+
+# Function to create Repository
+create_repository() {
+    local name=$1
+    local file="${BASE_DIR}/repositories/${name}Repository.java"
+    local content=$(cat <<EOL
+package ${BASE_PACKAGE}.repositories;
+
+import ${BASE_PACKAGE}.entities.${name};
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface ${name}Repository extends JpaRepository<${name}, Long> {
+    // Sample query method
+}
+EOL
+)
+    create_file "$file" "$content"
+}
+
+# Function to display help
+display_help() {
+    echo "Usage: $0 [options] <EntityName>"
+    echo "Options:"
+    echo "  -c, --controller  Create Controller"
+    echo "  -s, --service     Create Service"
+    echo "  -r, --repo        Create Repository and Entity"
+    echo "  -a, --all         Create Controller, Service, Repository, and Entity"
+    echo "  -h, --help        Display this help message"
+    exit 0
+}
+
+# Main script execution
+if [ $# -lt 2 ]; then
+    display_help
+fi
+
+# Parsing command-line options
+ENTITY_NAME=""
+CREATE_CONTROLLER=false
+CREATE_SERVICE=false
+CREATE_REPOSITORY=false
+
+while [[ "$1" != "" ]]; do
+    case $1 in
+        -c | --controller )
+            CREATE_CONTROLLER=true
+            ;;
+        -s | --service )
+            CREATE_SERVICE=true
+            ;;
+        -r | --repo )
+            CREATE_REPOSITORY=true
+            ;;
+        -a | --all )
+            CREATE_CONTROLLER=true
+            CREATE_SERVICE=true
+            CREATE_REPOSITORY=true
+            ;;
+        -h | --help )
+            display_help
+            ;;
+        * )
+            ENTITY_NAME=$1
+            ;;
+    esac
+    shift
+done
+
+if [ -z "$ENTITY_NAME" ]; then
+    echo "Error: Entity name is required."
+    display_help
+fi
+
+if $CREATE_CONTROLLER; then
+    create_controller "$ENTITY_NAME"
+fi
+
+if $CREATE_SERVICE; then
+    create_service "$ENTITY_NAME"
+fi
+
+if $CREATE_REPOSITORY; then
+    create_entity "$ENTITY_NAME"
+    create_repository "$ENTITY_NAME"
+fi
+
+if ! $CREATE_CONTROLLER && ! $CREATE_SERVICE && ! $CREATE_REPOSITORY; then
+    echo "No options specified. Use -h or --help for usage."
+fi
